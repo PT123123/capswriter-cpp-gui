@@ -62,13 +62,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  std::string config_path = ExeDirectory() + "/config.yaml";
-  for (int i = 1; i < argc; ++i) {
-    std::string arg = argv[i];
-    if ((arg == "--config" || arg == "-c") && i + 1 < argc) {
-      config_path = argv[++i];
-    }
-  }
+  std::string config_path = ResolveConfigPath(argc, argv);
 
   Config config;
   std::string err;

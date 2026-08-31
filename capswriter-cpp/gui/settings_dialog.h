@@ -55,6 +55,7 @@ class SettingsDialog : public QDialog {
   QCheckBox* restore_clip_check_ = nullptr;
   QCheckBox* show_hint_check_ = nullptr;
   QDoubleSpinBox* threshold_spin_ = nullptr;
+  QComboBox* microphone_combo_ = nullptr;  // empty item = system default
 
   // --- Text tab ---
   QCheckBox* traditional_check_ = nullptr;

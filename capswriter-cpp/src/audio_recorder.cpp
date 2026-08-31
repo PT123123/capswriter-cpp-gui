@@ -8,12 +8,16 @@
 // ships them, so external IID_/CLSID_ symbols must be avoided.
 #include <audioclient.h>
 #include <mmdeviceapi.h>
+#include <propsys.h>    // IPropertyStore, PROPVARIANT, PROPERTYKEY
+#include <propvarutil.h>  // PropVariantInit / PropVariantClear
 
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "resample.h"
+#include "util.h"
 
 namespace capswriter {
 
@@ -21,13 +25,20 @@ namespace {
 
 constexpr REFERENCE_TIME kBufferDuration = 200 * 10000;  // 200 ms in 100 ns
 
+// Initializes COM on the calling thread for the duration of the guard.
+// Only uninitializes when we were the one who initialized it (S_OK); if COM was
+// already initialized by the caller (e.g. Qt's STA main thread, where a
+// re-init with a different threading model returns RPC_E_CHANGED_MODE), we leave
+// the existing apartment untouched so we don't disturb the host. MMDevice works
+// fine in either apartment.
 struct ComGuard {
-  bool initialized = false;
+  bool need_uninit = false;
   ComGuard() {
-    initialized = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+    const HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    need_uninit = (hr == S_OK);
   }
   ~ComGuard() {
-    if (initialized) CoUninitialize();
+    if (need_uninit) CoUninitialize();
   }
 };
 
@@ -63,6 +74,81 @@ bool IsPcm16Format(const WAVEFORMATEX* fmt) {
 }
 
 }  // namespace
+
+std::vector<AudioDeviceInfo> ListCaptureDevices() {
+  std::vector<AudioDeviceInfo> result;
+
+  // PKEY_Device_FriendlyName, defined inline to avoid a propsys.lib dependency
+  // (the project avoids external GUID symbols — see the note at the top).
+  static const PROPERTYKEY kPkeyDeviceFriendlyName = {
+      {0xa45c254e, 0xdf1c, 0x4efd,
+       {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
+      2};
+
+  ComGuard com;
+  // If COM could not be initialized at all, bail out (result stays empty).
+  // When need_uninit is false but COM is otherwise usable (already initialized
+  // by the host), we can still proceed.
+  {
+    IMMDeviceEnumerator* raw = nullptr;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
+                                  CLSCTX_ALL, IID_PPV_ARGS(&raw));
+    if (FAILED(hr) || !raw) return result;
+    ComPtr<IMMDeviceEnumerator> enumerator(raw);
+
+    ComPtr<IMMDeviceCollection> collection;
+    {
+      IMMDeviceCollection* c = nullptr;
+      if (FAILED(enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE,
+                                                &c)) ||
+          !c) {
+        return result;
+      }
+      collection.reset(c);
+    }
+
+    UINT count = 0;
+    if (FAILED(collection->GetCount(&count))) return result;
+
+    for (UINT i = 0; i < count; ++i) {
+      ComPtr<IMMDevice> device;
+      {
+        IMMDevice* d = nullptr;
+        if (FAILED(collection->Item(i, &d)) || !d) continue;
+        device.reset(d);
+      }
+
+      AudioDeviceInfo info;
+      {
+        LPWSTR id_w = nullptr;
+        if (FAILED(device->GetId(&id_w))) continue;
+        info.id = WideToUtf8(std::wstring(id_w));
+        CoTaskMemFree(id_w);
+      }
+
+      // Friendly name via IPropertyStore (PKEY_Device_FriendlyName).
+      ComPtr<IPropertyStore> props;
+      {
+        IPropertyStore* p = nullptr;
+        if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &p)) && p) {
+          props.reset(p);
+          PROPVARIANT var;
+          PropVariantInit(&var);
+          if (SUCCEEDED(props->GetValue(kPkeyDeviceFriendlyName, &var)) &&
+              var.vt == VT_LPWSTR && var.pwszVal) {
+            info.name = WideToUtf8(std::wstring(var.pwszVal));
+          }
+          PropVariantClear(&var);
+        }
+      }
+      if (info.name.empty()) info.name = info.id;  // fallback label
+
+      result.push_back(std::move(info));
+    }
+  }
+
+  return result;
+}
 
 WasapiRecorder::WasapiRecorder() = default;
 
@@ -148,10 +234,20 @@ void WasapiRecorder::CaptureThread() {
   ComPtr<IMMDevice> device;
   {
     IMMDevice* raw = nullptr;
-    HRESULT hr = enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &raw);
-    if (FAILED(hr) || !raw) {
-      fail("no default capture device found");
-      return;
+    HRESULT hr;
+    if (!device_id_.empty()) {
+      const std::wstring wide_id = Utf8ToWide(device_id_);
+      hr = enumerator->GetDevice(wide_id.c_str(), &raw);
+      if (FAILED(hr) || !raw) {
+        fail("specified capture device not found: " + device_id_);
+        return;
+      }
+    } else {
+      hr = enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &raw);
+      if (FAILED(hr) || !raw) {
+        fail("no default capture device found");
+        return;
+      }
     }
     device.reset(raw);
   }

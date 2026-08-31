@@ -1,5 +1,7 @@
 #include "config.h"
 
+#include "util.h"  // WideToUtf8
+
 #include <windows.h>
 
 #include <algorithm>
@@ -193,6 +195,65 @@ std::string ExeDirectory() {
   return utf8;
 }
 
+std::string AppDataConfigPath() {
+  // Per-user roaming config: %APPDATA%/CapsWriter/config.yaml.
+  // Falls back to the executable directory when APPDATA is unavailable.
+  std::wstring buf;
+  buf.resize(MAX_PATH);
+  DWORD n = GetEnvironmentVariableW(L"APPDATA", &buf[0],
+                                    static_cast<DWORD>(buf.size()));
+  if (n > static_cast<DWORD>(buf.size())) {
+    buf.resize(n);
+    n = GetEnvironmentVariableW(L"APPDATA", &buf[0],
+                                static_cast<DWORD>(buf.size()));
+  }
+  if (n > 0 && n <= static_cast<DWORD>(buf.size())) {
+    std::wstring wdir(buf.data(), n);
+    std::string dir = WideToUtf8(wdir);
+    for (char& c : dir) {
+      if (c == '/') c = '\\';
+    }
+    if (!dir.empty() && dir.back() != '\\') dir += '\\';
+    return dir + "CapsWriter\\config.yaml";
+  }
+  return ExeDirectory() + "/config.yaml";
+}
+
+std::string ResolveConfigPath(int argc, char** argv) {
+  // 1) Explicit override always wins.
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if ((arg == "--config" || arg == "-c") && i + 1 < argc) {
+      return argv[++i];
+    }
+  }
+
+  const std::string appdata = AppDataConfigPath();
+  std::error_code ec;
+  if (std::filesystem::exists(appdata, ec)) return appdata;
+
+  // 2) First run: migrate an existing config next to the executable (or, in a
+  //    development build, at the project root two levels up) into %APPDATA%.
+  const std::string candidates[] = {
+      ExeDirectory() + "/config.yaml",
+      ExeDirectory() + "/../../config.yaml",
+  };
+  for (const std::string& src : candidates) {
+    if (std::filesystem::exists(src, ec)) {
+      std::filesystem::create_directories(
+          std::filesystem::path(appdata).parent_path(), ec);
+      std::filesystem::copy_file(
+          src, appdata, std::filesystem::copy_options::overwrite_existing, ec);
+      if (!ec) return appdata;
+      break;
+    }
+  }
+
+  // 3) No config anywhere: return the appdata path so LoadFromFile reports a
+  //    clear "cannot open config file" error.
+  return appdata;
+}
+
 bool Config::LoadFromFile(const std::string& path, std::string* error) {
   std::ifstream in(path, std::ios::binary);
   if (!in) {
@@ -228,6 +289,8 @@ bool Config::LoadFromFile(const std::string& path, std::string* error) {
   }
 
   threshold = GetDouble(root, "threshold", threshold);
+
+  microphone = GetStr(root, "microphone", microphone);
 
   paste = GetBool(root, "paste", paste);
   restore_clip = GetBool(root, "restore_clip", restore_clip);
@@ -329,6 +392,9 @@ std::string YamlScalar(const std::string& s) {
 }  // namespace
 
 bool Config::SaveToFile(const std::string& path, std::string* error) const {
+  std::error_code ec;
+  std::filesystem::create_directories(
+      std::filesystem::path(path).parent_path(), ec);
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   if (!out) {
     if (error) *error = "cannot write config file: " + path;
@@ -365,6 +431,9 @@ bool Config::SaveToFile(const std::string& path, std::string* error) const {
   for (const auto& a : paste_apps) out << "  - " << YamlScalar(a) << "\n";
   if (paste_apps.empty()) out << "  []\n";
   out << "\n";
+
+  out << "# Microphone (empty = system default input device)\n";
+  out << "microphone: " << YamlScalar(microphone) << "\n\n";
 
   out << "# Auto Enter\n";
   out << "enter_apps:\n";

@@ -86,7 +86,7 @@ LLM 角色润色、文件转录（拖拽音视频出字幕/文本/时间戳）�
    控制台版（后台常驻钩子进程，日志写入 stderr，Ctrl+C 退出）：
 
    ```bat
-   capswriter.exe              :: 读取 exe 同目录的 config.yaml
+   capswriter.exe              :: 读取 %APPDATA%/CapsWriter/config.yaml（首次运行自动从 exe 目录迁移）
    capswriter.exe --config D:\my.yaml
    ```
 

@@ -55,6 +55,7 @@ bool DictationController::StartRecording() {
   if (recording_.load() || busy_.load()) return false;
 
   std::string err;
+  recorder_.set_device_id(config_.microphone);
   if (!recorder_.Start(&err)) {
     LOG_ERROR("Microphone unavailable: %s", err.c_str());
     return false;

@@ -24,6 +24,7 @@
 #include <filesystem>
 
 #include "app_icons.h"
+#include "../src/audio_recorder.h"
 #include "../src/config.h"
 #include "../src/log.h"
 
@@ -285,6 +286,31 @@ void SettingsDialog::BuildUi() {
              "\xe5\x88\xab\xe5\xb9\xb6"
              "\xe8\xa1\xa5\xe5\x8f\x91\xe3\x80\x82"));
   // "短于此时间视为普通按键，取消识别并补发。"
+
+  microphone_combo_ = new QComboBox;
+  {
+    // 第一项固定为系统默认输入设备(空 id)。
+    microphone_combo_->addItem(QStringLiteral("系统默认"), QVariant(QString()));
+    const std::vector<AudioDeviceInfo> devices = ListCaptureDevices();
+    for (const auto& dev : devices) {
+      microphone_combo_->addItem(QString::fromStdString(dev.name),
+                                 QVariant(QString::fromStdString(dev.id)));
+    }
+  }
+  AddRow(output_form,
+         QStringLiteral("\xe9\xba\xa6\xe5\x85\x8b\xe9\xa3\x8e"),
+         // "麦克风"
+         microphone_combo_,
+         QStringLiteral(
+             "\xe5\xbd\x95\xe9\x9f\xb3\xe4\xbd\xbf"
+             "\xe7\x94\xa8\xe7\x9a\x84\xe8\xbe\x93"
+             "\xe5\x85\xa5\xe8\xae\xbe\xe5\xa4\x87"
+             "\xef\xbc\x9b\xe9\xbb\x98\xe8\xae\xa4"
+             "\xe4\xb8\xba\xe7\xb3\xbb\xe7\xbb\x9f"
+             "\xe5\xbd\x93\xe5\x89\x8d\xe9\xbb\x98"
+             "\xe8\xae\xa4\xe8\xbe\x93\xe5\x85\xa5"
+             "\xe3\x80\x82"));
+  // "录音使用的输入设备；默认为系统当前默认输入。"
 
   tabs->addTab(output_tab,  // 📤 输出
                MakeEmojiIcon(0x1F4E4, 16, QColor(45, 110, 158)),
@@ -599,6 +625,13 @@ void SettingsDialog::LoadFromConfig() {
   show_hint_check_->setChecked(config_->show_hint);
   threshold_spin_->setValue(config_->threshold);
 
+  // Microphone: match the combo to the saved endpoint id (empty = default).
+  {
+    const QString cur = QString::fromStdString(config_->microphone);
+    const int idx = microphone_combo_->findData(QVariant(cur));
+    microphone_combo_->setCurrentIndex(idx >= 0 ? idx : 0);
+  }
+
   // Text
   punct_check_->setChecked(config_->punct.enabled);
   traditional_check_->setChecked(config_->traditional_convert);
@@ -658,6 +691,8 @@ void SettingsDialog::ApplyToConfig() {
   config_->restore_clip = restore_clip_check_->isChecked();
   config_->show_hint = show_hint_check_->isChecked();
   config_->threshold = threshold_spin_->value();
+  config_->microphone =
+      microphone_combo_->currentData().toString().toStdString();
 
   // Text
   config_->punct.enabled = punct_check_->isChecked();

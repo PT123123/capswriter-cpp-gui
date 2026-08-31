@@ -34,11 +34,17 @@ class TrayController : public QObject {
   void ShowWindow();
   void OpenSettings();
 
+  // (Re)builds the microphone selection submenu from the live device list.
+  // Called when the submenu is about to show so the device list and the
+  // current selection stay fresh.
+  void RebuildMicrophoneMenu();
+
   MainWindow* window_ = nullptr;
   Config* config_ = nullptr;
   std::string config_path_;
   QSystemTrayIcon* tray_ = nullptr;
   QMenu* menu_ = nullptr;
+  QMenu* mic_submenu_ = nullptr;  // microphone selection (owned by menu_)
   TrayIconState current_state_ = TrayIconState::kIdle;
 };
 

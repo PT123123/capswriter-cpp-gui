@@ -268,14 +268,13 @@ int main(int argc, char* argv[]) {
   app.setQuitOnLastWindowClosed(false);
 
   // ---- 命令行 ----
-  std::string config_path = ExeDirectory() + "/config.yaml";
+  // 配置文件默认位于 %APPDATA%/CapsWriter/config.yaml（首次运行自动迁移）。
+  // 仍可用 --config/-c 显式指定；--screenshot 仅用于界面自测。
+  std::string config_path = ResolveConfigPath(argc, argv);
   QString screenshot_path;
   for (int i = 1; i < argc; ++i) {
     const QString arg = QString::fromLocal8Bit(argv[i]);
-    if ((arg == QStringLiteral("--config") || arg == QStringLiteral("-c")) &&
-        i + 1 < argc) {
-      config_path = QString::fromLocal8Bit(argv[++i]).toStdString();
-    } else if (arg == QStringLiteral("--screenshot") && i + 1 < argc) {
+    if (arg == QStringLiteral("--screenshot") && i + 1 < argc) {
       // --screenshot <path>:启动并加载完成后 1.5 秒截图保存并退出
       // (仅用于无人工参与的界面验证)。
       screenshot_path = QString::fromLocal8Bit(argv[++i]);

@@ -5,6 +5,9 @@
 #include <QMenu>
 
 #include "app_icons.h"
+#include "audio_recorder.h"
+#include "config.h"
+#include "log.h"
 #include "main_window.h"
 #include "settings_dialog.h"
 
@@ -47,6 +50,16 @@ bool TrayController::Initialize() {
   auto* action_log = menu_->addAction(
       MakeEmojiIcon(0x1F4CB, 16, QColor(47, 125, 246)),
       QStringLiteral("打开日志"));  // 📋
+
+  // 麦克风选择子菜单:列出所有可用输入设备,当前选中的打勾;选择后写入
+  // config.microphone 并保存到 config.yaml(下次录音生效,无需重启)。
+  mic_submenu_ = new QMenu(QStringLiteral("选择麦克风"), menu_);  // 🎤
+  mic_submenu_->setIcon(
+      MakeEmojiIcon(0x1F3A4, 16, QColor(47, 125, 246)));
+  menu_->addMenu(mic_submenu_);
+  connect(mic_submenu_, &QMenu::aboutToShow, this,
+          &TrayController::RebuildMicrophoneMenu);
+
   menu_->addSeparator();
   auto* action_quit = menu_->addAction(
       MakeEmojiIcon(0x1F6AA, 16, QColor(196, 43, 28)),
@@ -105,6 +118,36 @@ void TrayController::ShowWindow() {
 void TrayController::OpenSettings() {
   SettingsDialog dialog(config_, config_path_, nullptr);
   dialog.exec();
+}
+
+void TrayController::RebuildMicrophoneMenu() {
+  if (!mic_submenu_) return;
+  mic_submenu_->clear();
+
+  const std::vector<AudioDeviceInfo> devices = ListCaptureDevices();
+
+  auto add_entry = [this](const std::string& id, const QString& label) {
+    auto* action = mic_submenu_->addAction(label);
+    action->setCheckable(true);
+    action->setChecked(id == config_->microphone);
+    connect(action, &QAction::triggered, this, [this, id] {
+      config_->microphone = id;
+      std::string err;
+      if (config_->SaveToFile(config_path_, &err)) {
+        LOG_INFO("Microphone set to: %s",
+                 id.empty() ? "<system default>" : id.c_str());
+      } else {
+        LOG_ERROR("Failed to save microphone setting: %s", err.c_str());
+      }
+    });
+  };
+
+  // 系统默认(空 id)。
+  add_entry("", QStringLiteral("系统默认"));
+  if (!devices.empty()) mic_submenu_->addSeparator();
+  for (const auto& dev : devices) {
+    add_entry(dev.id, QString::fromStdString(dev.name));
+  }
 }
 
 }  // namespace capswriter

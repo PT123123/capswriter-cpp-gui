@@ -8,6 +8,17 @@ namespace capswriter {
 // Directory of the running executable, as a UTF-8 path.
 std::string ExeDirectory();
 
+// Per-user roaming config path: %APPDATA%/CapsWriter/config.yaml.
+// Falls back to the executable directory when APPDATA is unavailable.
+std::string AppDataConfigPath();
+
+// Resolve the config file path to load:
+//   1) explicit --config/-c <path> if given,
+//   2) %APPDATA%/CapsWriter/config.yaml (migrated from the executable
+//      directory on first run),
+//   3) fallback to a config.yaml next to the executable.
+std::string ResolveConfigPath(int argc, char** argv);
+
 // Mirrors one entry of ClientConfig.shortcuts in config_client.py.
 struct ShortcutConfig {
   std::string key;                    // e.g. "caps_lock", "f12", "x2"
@@ -90,6 +101,12 @@ struct Config {
   int udp_control_port = 6018;
 
   std::string model_root;  // base directory for relative model paths
+
+  // Selected capture device (microphone). Empty = use the system default input
+  // device. Holds the WASAPI endpoint id; set via the tray menu or the settings
+  // dialog. Changing it takes effect on the next recording (no restart needed).
+  std::string microphone;
+
   bool debug = false;
   std::string log_level = "INFO";  // DEBUG | INFO | WARNING | ERROR
 
