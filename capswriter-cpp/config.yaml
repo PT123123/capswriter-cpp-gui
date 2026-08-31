@@ -1,0 +1,89 @@
+# CapsWriter-Offline C++ 客户端配置
+# 语义对齐原项目 config_client.py / config_server.py 的听写部分。
+# 相对路径相对 exe 所在目录解析（可用 model_root 指定基准目录）。
+
+# 模型位于本项目的 models/ 目录。exe 位于 capswriter-cpp/build/Release/，
+# 上跳两级即项目根：
+model_root: ../..
+
+# 快捷键（对应 ClientConfig.shortcuts）
+shortcuts:
+  - key: caps_lock        # 大写锁定
+    type: keyboard
+    suppress: true        # 阻塞按键；短按(<threshold)自动补发，不影响单击功能
+    hold_mode: true       # 长按说话，松开识别
+    enabled: true
+  - key: x2               # 鼠标侧键（前进键）
+    type: mouse
+    suppress: true
+    hold_mode: true
+    enabled: true
+
+threshold: 0.3            # 秒；短于此视为普通按键
+
+# 输出方式（对应 ClientConfig.paste 等）
+paste: false              # true=写剪贴板后模拟 Ctrl+V；false=模拟打字
+restore_clip: true        # 粘贴后恢复原剪贴板内容
+paste_apps:               # 在这些进程中强制粘贴
+  - WeiXin.exe
+  - Telegram.exe
+
+# 输出后自动回车（对应 enter_apps）：app=进程名，delay=延迟秒数
+enter_apps:
+  - app: happ.exe
+    delay: 0.5
+  - app: hexin.exe
+    delay: 0.5
+
+# 录音保存与日记归档（对应 save_audio / DiaryWriter）
+save_audio: false         # 保存每次录音（16 kHz 单声道 wav，无 FFmpeg 依赖）
+audio_name_len: 20        # 文件名中使用识别结果的前多少个字
+data_root: .              # 录音/日记的根目录（相对 exe 所在目录）
+
+# 繁体转换（对应 traditional_convert；基于系统字表逐字转换，词语级转换有差异）
+traditional_convert: false
+traditional_locale: zh-hant   # zh-hant | zh-tw | zh-hk
+
+# 规则替换（对应 hot_rule / hot-rule.txt，格式同原项目 "正则 = 替换"）
+hot_rule: true
+rule_file: hot-rule.txt   # 相对路径基于 model_root 解析，默认复用原项目文件
+
+# UDP 广播识别结果（对应 udp_broadcast）
+udp_broadcast: false
+udp_broadcast_targets:
+  - addr: 127.255.255.255
+    port: 6017
+
+# UDP 外部控制录音（对应 udp_control）：向端口发送 START / STOP
+udp_control: false
+udp_control_addr: 127.0.0.1
+udp_control_port: 6018
+
+# 末尾标点消除（对应 trash_punc 系列）
+trash_punc: '，。,.'
+trash_punc_thresh: 8      # 语义字符数不超过该值时去除末尾标点
+trash_punc_apps:
+  - WeiXin.exe
+
+# 识别引擎（对应 ServerConfig + ParaformerArgs）
+asr:
+  num_threads: 4
+  provider: cpu           # cpu | cuda
+  decoding_method: greedy_search
+  # int8 量化版（原 fp32 248M 已删，见 README「模型精简与恢复」）
+  paraformer_model: models/paraformer-offline-zh/model.int8.onnx
+  tokens: models/paraformer-offline-zh/tokens.txt
+  # 上下文热词（sherpa-onnx contextual biasing，每行一个词；留空关闭。
+  # 注意：原项目 hot.txt 的音素级 RAG 热词替换未移植）
+  hotwords_file: ''
+  hotwords_score: 1.5
+
+# 标点恢复（对应 Punct-CT-Transformer）
+punct:
+  enabled: true
+  num_threads: 2
+  provider: cpu
+  model: models/Punct-CT-Transformer/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12/model.onnx
+
+debug: false
+log_level: INFO           # DEBUG | INFO | WARNING | ERROR

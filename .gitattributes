@@ -1,0 +1,5 @@
+# 统一换行符策略：文本文件入库用 LF，工作区按平台自动转换
+* text=auto
+
+# Windows 批处理脚本保持 CRLF，避免 cmd 执行异常
+*.bat text eol=crlf

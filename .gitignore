@@ -1,0 +1,45 @@
+# ============================================================
+# CapsWriter 项目 .gitignore
+# ============================================================
+
+# ---------- 模型大文件（不入库） ----------
+# 语音识别（ASR）与标点恢复（PUNC）所需的 ONNX 模型约 240~300MB，不入库。
+# clone 后按 capswriter-cpp/README.md「模型」章节自行下载：
+#
+# 1) ASR —— Paraformer int8 量化版
+#    应放入目录：models/paraformer-offline-zh/
+#    需要文件：model.int8.onnx + tokens.txt + am.mvn + config.yaml
+#    来源：https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14
+#          （git clone 后仅保留上述文件；fp32 原版见 README）
+#
+# 2) PUNC —— 标点恢复 CT-Transformer（fp32）
+#    应放入目录：
+#    models/Punct-CT-Transformer/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12/
+#    需要文件：model.onnx + tokens.json + config.yaml
+#    来源：https://github.com/HaujetZhao/CapsWriter-Offline/releases/tag/v1.0
+#          （或百度网盘，提取码 eu4c：https://pan.baidu.com/s/1zNHstoWZDJVynCBz2yS9vg）
+#
+# 注意：models/ 下的小文件（tokens、config、README、下载链接）会正常入库，
+#       仅模型二进制被忽略。
+*.onnx
+*.gguf
+*.safetensors
+*.tflite
+*.pt
+*.pth
+
+# ---------- 构建产物 ----------
+capswriter-cpp/build/
+*.obj
+*.tlog
+*.pdb
+
+# ---------- 工具 / 项目数据 ----------
+# WorkBuddy 项目数据（含 backup、memory 等），不入库
+.workbuddy/
+
+# ---------- 临时文件 ----------
+.qoder-scratch-check.txt
+*.log
+Thumbs.db
+Desktop.ini
