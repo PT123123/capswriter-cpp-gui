@@ -4,21 +4,24 @@
 #include <QWidget>
 
 class QLabel;
+class QPlainTextEdit;
 class QPushButton;
 class QTabWidget;
-class QTextEdit;
 
 namespace capswriter {
 
 // 无边框暗色主窗口,布局模仿原版 tray_gui.py:
 //  - 自定义标题栏(标题 + 最小化/最大化/关闭按钮,关闭按钮悬停变红)
-//  - QTabWidget 双标签页:日志 / 识别结果(只读 QTextEdit,自动滚动)
+//  - QTabWidget 双标签页:日志 / 识别结果(只读 QPlainTextEdit,自动滚动)
 //  - 按住窗口任意位置拖动
 //  - 点关闭只是隐藏到托盘,托盘菜单"退出"才真正退出
 //
 // 与废弃的 qt-tray-gui 骨架不同,本窗口接入真实程序:
 // AppendLog 由 Logger sink 驱动,AppendResult 由 DictationController
 // 的识别结果回调驱动(两者均经线程安全队列 + 主线程定时器刷新)。
+//
+// 两个视图都用 QPlainTextEdit 并设了 maximumBlockCount:程序是托盘常驻的,
+// 不做上限的话日志/识别结果会随会话时长无限累积(内存与绘制成本只增不减)。
 class MainWindow : public QWidget {
   Q_OBJECT
 
@@ -40,15 +43,15 @@ class MainWindow : public QWidget {
 
  private:
   void ToggleMaximize();
-  QTextEdit* MakeLogView();
+  QPlainTextEdit* MakeLogView();
 
   QLabel* title_label_ = nullptr;
   QPushButton* min_button_ = nullptr;
   QPushButton* max_button_ = nullptr;
   QPushButton* close_button_ = nullptr;
   QTabWidget* tab_widget_ = nullptr;
-  QTextEdit* log_view_ = nullptr;
-  QTextEdit* result_view_ = nullptr;
+  QPlainTextEdit* log_view_ = nullptr;
+  QPlainTextEdit* result_view_ = nullptr;
 
   QPoint drag_offset_;
   bool exit_requested_ = false;

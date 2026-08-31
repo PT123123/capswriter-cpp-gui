@@ -2,11 +2,23 @@
 
 #include <string>
 
+#include <windows.h>
+
 namespace capswriter {
 
 // Lower-cased executable name of the foreground window, e.g. "weixin.exe".
 // Returns an empty string on failure.
 std::string GetForegroundProcessName();
+
+// True when the foreground window currently has an active text-input
+// context: a focused native edit control, an editable document (Chrome,
+// Office, ...), or a visible caret. Used to decide whether recognized text
+// should be typed into the focused box or copied to the clipboard instead.
+bool HasTextInputFocus();
+
+// Screen-space rectangle (in physical pixels) of the caret of the focused
+// text input. Returns false when no usable caret is present.
+bool GetCaretScreenRect(RECT* out);
 
 // Semantic unit count, mirroring count_semantic_units() in
 // core/client/output/text_output.py: one CJK char = 1, one run of ASCII

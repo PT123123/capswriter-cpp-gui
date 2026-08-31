@@ -27,11 +27,10 @@ add_library(capswriter_core STATIC
   src/hotkey_listener.cpp
   src/text_injector.cpp
   src/text_transform.cpp
-  src/audio_store.cpp
-  src/diary.cpp
   src/dictation.cpp
   src/udp_io.cpp
   src/window_util.cpp
+  src/instance_guard.cpp
 )
 
 target_include_directories(capswriter_core PUBLIC
@@ -49,7 +48,7 @@ if(NOT SHERPA_ONNX_C_API_LIB)
 endif()
 
 target_link_libraries(capswriter_core PUBLIC
-  ${SHERPA_ONNX_C_API_LIB} ole32 user32 ws2_32 uuid)
+  ${SHERPA_ONNX_C_API_LIB} ole32 user32 ws2_32 uuid uiautomationcore)
 
 if(MSVC)
   target_compile_definitions(capswriter_core PUBLIC
@@ -60,7 +59,7 @@ endif()
 # ---------------------------------------------------------------------------
 # Console frontend (unchanged behaviour).
 # ---------------------------------------------------------------------------
-add_executable(capswriter src/main.cpp)
+add_executable(capswriter src/main.cpp src/version.rc)
 target_link_libraries(capswriter PRIVATE capswriter_core)
 
 # ---------------------------------------------------------------------------
@@ -80,17 +79,24 @@ if(CAPSWRITER_BUILD_GUI)
   if(CAPSWRITER_QT_LIB)
     set(CMAKE_AUTOMOC ON)
     add_executable(capswriter-gui WIN32
+      src/version.rc
       gui/main.cpp
       gui/main_window.h
       gui/main_window.cpp
+      gui/hint_toast.h
+      gui/hint_toast.cpp
+      gui/settings_dialog.h
+      gui/settings_dialog.cpp
       gui/tray_controller.h
       gui/tray_controller.cpp
       gui/app_icons.h
       gui/app_icons.cpp
     )
-    target_link_libraries(capswriter-gui PRIVATE capswriter_core ${CAPSWRITER_QT_LIB})
+    # shell32:SetCurrentProcessExplicitAppUserModelID(任务栏图标分组)。
+    target_link_libraries(capswriter-gui PRIVATE
+      capswriter_core ${CAPSWRITER_QT_LIB} shell32)
     if(MSVC)
-      target_compile_options(capswriter-gui PRIVATE /W3)
+      target_compile_options(capswriter-gui PRIVATE /W3 /utf-8)
     endif()
 
     # Deploy the Qt runtime DLLs next to the exe when windeployqt is found.

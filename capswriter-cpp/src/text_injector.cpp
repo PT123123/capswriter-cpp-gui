@@ -131,6 +131,11 @@ bool PasteUtf8Text(const std::string& utf8, bool restore_clip) {
   return true;
 }
 
+bool CopyUtf8Text(const std::string& utf8) {
+  if (utf8.empty()) return true;
+  return SetClipboardText(Utf8ToWide(utf8));
+}
+
 void SendEnterKey() {
   INPUT inputs[2]{};
   inputs[0].type = INPUT_KEYBOARD;

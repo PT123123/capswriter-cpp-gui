@@ -58,12 +58,12 @@ struct Config {
   bool restore_clip = true;  // restore the clipboard after pasting
   std::vector<std::string> paste_apps;  // force paste in these processes
 
+  // Floating hint bar near the input box while dictation is in progress /
+  // after output (GUI frontend only; pure text + emoji, no images).
+  bool show_hint = true;
+
   // Auto-Enter after output in these apps (Config.enter_apps).
   std::vector<EnterAppRule> enter_apps;
-
-  bool save_audio = false;   // save each recording as a wav file
-  int audio_name_len = 20;   // prefix length (code points) used in the name
-  std::string data_root;     // base dir for recordings/diary (exe dir if empty)
 
   bool traditional_convert = false;      // convert output to traditional Chinese
   std::string traditional_locale;        // "zh-hant" | "zh-tw" | "zh-hk"
@@ -94,6 +94,11 @@ struct Config {
   std::string log_level = "INFO";  // DEBUG | INFO | WARNING | ERROR
 
   bool LoadFromFile(const std::string& path, std::string* error);
+
+  // Serialize the current config back to a YAML file. Preserves the
+  // same field order and structure as config.yaml. Returns false on
+  // write failure.
+  bool SaveToFile(const std::string& path, std::string* error) const;
 
   // Resolve a possibly-relative path against model_root (or the executable
   // directory when model_root is empty).

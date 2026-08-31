@@ -24,6 +24,7 @@ threshold: 0.3            # 秒；短于此视为普通按键
 # 输出方式（对应 ClientConfig.paste 等）
 paste: false              # true=写剪贴板后模拟 Ctrl+V；false=模拟打字
 restore_clip: true        # 粘贴后恢复原剪贴板内容
+show_hint: true           # 输入时在输入框下方显示提示条（emoji+文字，无图片）
 paste_apps:               # 在这些进程中强制粘贴
   - WeiXin.exe
   - Telegram.exe
@@ -35,10 +36,7 @@ enter_apps:
   - app: hexin.exe
     delay: 0.5
 
-# 录音保存与日记归档（对应 save_audio / DiaryWriter）
-save_audio: false         # 保存每次录音（16 kHz 单声道 wav，无 FFmpeg 依赖）
-audio_name_len: 20        # 文件名中使用识别结果的前多少个字
-data_root: .              # 录音/日记的根目录（相对 exe 所在目录）
+# 录音保存与日记归档功能已移除（不会在本地保存任何录音文件）
 
 # 繁体转换（对应 traditional_convert；基于系统字表逐字转换，词语级转换有差异）
 traditional_convert: false
@@ -73,9 +71,10 @@ asr:
   # int8 量化版（原 fp32 248M 已删，见 README「模型精简与恢复」）
   paraformer_model: models/paraformer-offline-zh/model.int8.onnx
   tokens: models/paraformer-offline-zh/tokens.txt
-  # 上下文热词（sherpa-onnx contextual biasing，每行一个词；留空关闭。
-  # 注意：原项目 hot.txt 的音素级 RAG 热词替换未移植）
-  hotwords_file: ''
+  # 注意：Paraformer 仅支持 greedy_search；sherpa-onnx contextual biasing
+  # (hotwords_file) 要求 modified_beam_search，两者互斥，故热词文件保持禁用。
+  # （原项目 hot.txt 的音素级 RAG 热词替换未移植）
+  hotwords_file:          # 留空 = 关闭上下文热词
   hotwords_score: 1.5
 
 # 标点恢复（对应 Punct-CT-Transformer）

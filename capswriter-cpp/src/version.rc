@@ -1,0 +1,37 @@
+// VERSIONINFO resource for capswriter.exe / capswriter-gui.exe.
+// Makes the version visible in file properties and lets instance_guard.cpp
+// decide "new version replaces old version". Version numbers live in
+// version.h. Keep this file pure ASCII (see note in version.h).
+#include <windows.h>
+#include "version.h"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION CAPSWRITER_VERSION_FILE
+ PRODUCTVERSION CAPSWRITER_VERSION_FILE
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "CapsWriter-Offline (C++ port)"
+            VALUE "FileDescription", "CapsWriter-Offline C++ client"
+            // Keep in sync with version.h (rc.exe does not expand the
+            // stringize macro even with two levels of indirection).
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "InternalName", "capswriter"
+            VALUE "LegalCopyright", ""
+            VALUE "OriginalFilename", "capswriter.exe"
+            VALUE "ProductName", "CapsWriter-Offline C++"
+            VALUE "ProductVersion", "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0804, 1200
+    END
+END

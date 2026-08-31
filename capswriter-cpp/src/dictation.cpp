@@ -15,6 +15,11 @@ namespace capswriter {
 
 namespace {
 
+void EmitEvent(const DictationEventCallback& cb, DictationEvent ev,
+               OutputKind kind, const std::string& text) {
+  if (cb) cb(ev, kind, text);
+}
+
 bool ContainsApp(const std::vector<std::string>& apps,
                  const std::string& process_name) {
   if (process_name.empty()) return false;
@@ -28,25 +33,11 @@ bool ContainsApp(const std::vector<std::string>& apps,
   });
 }
 
-// Resolves data_root against the exe directory (empty = exe directory).
-std::string ResolveDataRoot(const Config& config) {
-  const std::string& root = config.data_root;
-  auto is_absolute = [](const std::string& p) {
-    return (p.size() >= 2 && p[1] == ':') || p[0] == '/' || p[0] == '\\';
-  };
-  if (root.empty()) return ExeDirectory();
-  if (is_absolute(root)) return root;
-  return ExeDirectory() + "/" + root;
-}
-
 }  // namespace
 
 DictationController::DictationController(const Config& config,
                                          AsrEngine* engine)
     : config_(config), engine_(engine) {
-  const std::string data_root = ResolveDataRoot(config);
-  audio_store_ = std::make_unique<AudioStore>(data_root);
-  diary_ = std::make_unique<DiaryWriter>(data_root);
   broadcaster_ = std::make_unique<UdpBroadcaster>(config.udp_broadcast_targets);
 
   if (config.hot_rule) {
@@ -72,6 +63,7 @@ bool DictationController::StartRecording() {
   start_time_ = std::chrono::steady_clock::now();
   recording_.store(true);
   LOG_INFO("Recording... release the key to recognize.");
+  EmitEvent(event_callback_, DictationEvent::kRecordingStarted, OutputKind::kTyped, "");
   return true;
 }
 
@@ -108,34 +100,29 @@ void DictationController::Stop() {
 void DictationController::RunPipeline(bool recognize) {
   std::vector<float> samples = recorder_.Stop();
   const int sample_rate = recorder_.target_sample_rate();
-  const std::time_t t0 = time_start_;
   busy_.store(true);  // stays set until the pipeline finishes
 
   if (!recognize) {
     LOG_INFO("Recording cancelled.");
+    EmitEvent(event_callback_, DictationEvent::kRecordingEnded, OutputKind::kTyped, "");
     busy_.store(false);
     return;
   }
   if (samples.empty()) {
     LOG_INFO("No audio captured.");
+    EmitEvent(event_callback_, DictationEvent::kRecordingEnded, OutputKind::kTyped, "");
     busy_.store(false);
     return;
   }
 
   const double duration = static_cast<double>(samples.size()) / sample_rate;
 
-  // Save the recording before renaming it with the recognized text.
-  std::string audio_path;
-  if (config_.save_audio) {
-    audio_path = audio_store_->Save(samples.data(), samples.size(),
-                                    sample_rate, t0);
-  }
-
   LOG_INFO("Recognizing %.2fs of audio...", duration);
   std::string text = engine_->Recognize(
       samples.data(), static_cast<int32_t>(samples.size()), sample_rate);
   if (text.empty()) {
     LOG_INFO("No speech recognized.");
+    EmitEvent(event_callback_, DictationEvent::kRecordingEnded, OutputKind::kTyped, "");
     busy_.store(false);
     return;
   }
@@ -166,12 +153,35 @@ void DictationController::RunPipeline(bool recognize) {
 
   const bool use_paste =
       config_.paste || ContainsApp(config_.paste_apps, process_name);
+
+  // When the hotkey fires outside a text input (desktop, file manager,
+  // our own UI, ...), typing would go nowhere: copy to the clipboard
+  // instead and let the frontend say so.
+  if (!HasTextInputFocus()) {
+    if (CopyUtf8Text(text)) {
+      broadcaster_->Broadcast(text);
+      LOG_INFO("No text input focused; result copied to the clipboard.");
+      EmitEvent(event_callback_, DictationEvent::kTextOutput,
+                OutputKind::kCopied, text);
+    } else {
+      LOG_ERROR("Failed to copy the recognized text to the clipboard.");
+      EmitEvent(event_callback_, DictationEvent::kOutputFailed,
+                OutputKind::kCopied, text);
+    }
+    busy_.store(false);
+    return;
+  }
+
   const bool ok = use_paste ? PasteUtf8Text(text, config_.restore_clip)
                             : InjectUtf8Text(text);
   if (!ok) {
     LOG_ERROR("Failed to output the recognized text.");
+    EmitEvent(event_callback_, DictationEvent::kOutputFailed,
+              use_paste ? OutputKind::kPasted : OutputKind::kTyped, text);
   } else {
     broadcaster_->Broadcast(text);
+    EmitEvent(event_callback_, DictationEvent::kTextOutput,
+              use_paste ? OutputKind::kPasted : OutputKind::kTyped, text);
 
     // Auto Enter for configured apps (Config.enter_apps).
     for (const EnterAppRule& rule : config_.enter_apps) {
@@ -184,13 +194,6 @@ void DictationController::RunPipeline(bool recognize) {
         LOG_INFO("Auto Enter scheduled in %.2fs", delay);
       }
     }
-  }
-
-  // Rename the recording with the final text and write the diary entry.
-  if (config_.save_audio && !audio_path.empty()) {
-    const std::string final_path = audio_store_->Rename(
-        audio_path, text, t0, config_.audio_name_len);
-    diary_->Write(text, t0, final_path);
   }
 
   busy_.store(false);

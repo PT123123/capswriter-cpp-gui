@@ -5,15 +5,23 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QSize>
 #include <QTabWidget>
-#include <QTextEdit>
 #include <QTime>
 #include <QVBoxLayout>
 
+#include "app_icons.h"
+
 namespace capswriter {
 namespace {
+
+// 日志/识别结果视图各自保留的最大行数。程序托盘常驻,超出后由
+// QPlainTextEdit 自动丢弃最旧的段落,内存占用因此有恒定上界。
+// 一次听写约产生 3~5 行日志 + 1 行结果,2000 行约合数百次听写的历史。
+constexpr int kMaxViewBlocks = 2000;
 
 // 与 tray_gui.py 一致的暗色主题样式表。
 const char kAppStyleSheet[] = R"(
@@ -21,7 +29,7 @@ const char kAppStyleSheet[] = R"(
         background-color: #121212;
         color: #e0e0e0;
     }
-    QTextEdit {
+    QTextEdit, QPlainTextEdit {
         background-color: #1e1e1e;
         color: #e0e0e0;
         border: 1px solid #333;
@@ -100,6 +108,19 @@ MainWindow::MainWindow(QWidget* parent) : QWidget(parent) {
   title_layout->setContentsMargins(8, 0, 0, 0);
   title_layout->setSpacing(0);
 
+  // 窗口/任务栏图标:emoji 实时绘制,不使用任何外部 .ico 资源。
+  setWindowIcon(MakeAppIcon());
+
+  // 标题栏左侧的徽标:与窗口/任务栏图标同一张 emoji 徽章。
+  // 这里不用裸 emoji 字符——🎤 在 Segoe UI Emoji 里是深色字形,
+  // 放在 #1e1e1e 的标题栏上几乎看不见,徽章的蓝底能把它衬出来。
+  auto* logo_label = new QLabel(title_bar);
+  logo_label->setObjectName(QStringLiteral("logoLabel"));
+  logo_label->setPixmap(MakeAppIcon().pixmap(16, 16));
+  logo_label->setStyleSheet(
+      QStringLiteral("QLabel#logoLabel { margin-right: 6px; }"));
+  title_layout->addWidget(logo_label);
+
   title_label_ = new QLabel(QStringLiteral("CapsWriter-Offline"), title_bar);
   title_label_->setObjectName(QStringLiteral("titleLabel"));
   title_layout->addWidget(title_label_);
@@ -135,10 +156,16 @@ MainWindow::MainWindow(QWidget* parent) : QWidget(parent) {
   // 原版 tray_gui 的"服务端日志/客户端日志"不同,这里改为程序
   // 日志与识别历史两个视图。
   tab_widget_ = new QTabWidget(content_widget);
+  tab_widget_->setIconSize(QSize(16, 16));
   log_view_ = MakeLogView();
   result_view_ = MakeLogView();
-  tab_widget_->addTab(log_view_, QStringLiteral("日志"));
-  tab_widget_->addTab(result_view_, QStringLiteral("识别结果"));
+  // 标签页图标:📄 日志 / 💬 识别结果,同样由 emoji 实时绘制。
+  tab_widget_->addTab(log_view_,
+                      MakeEmojiIcon(0x1F4C4, 16, QColor(45, 110, 158)),
+                      QStringLiteral("日志"));
+  tab_widget_->addTab(result_view_,
+                      MakeEmojiIcon(0x1F4AC, 16, QColor(38, 140, 110)),
+                      QStringLiteral("识别结果"));
   content_layout->addWidget(tab_widget_);
 
   root->addWidget(content_widget);
@@ -146,15 +173,20 @@ MainWindow::MainWindow(QWidget* parent) : QWidget(parent) {
   setStyleSheet(QString::fromUtf8(kAppStyleSheet));
 }
 
-QTextEdit* MainWindow::MakeLogView() {
-  auto* view = new QTextEdit();
+QPlainTextEdit* MainWindow::MakeLogView() {
+  auto* view = new QPlainTextEdit();
   view->setReadOnly(true);
+  // 上限保护:超出后 Qt 自动丢弃最旧段落,常驻运行也不会无限膨胀。
+  view->setMaximumBlockCount(kMaxViewBlocks);
+  // 长行不换行,避免单行文本触发昂贵的横向布局计算。
+  view->setLineWrapMode(QPlainTextEdit::NoWrap);
   return view;
 }
 
 void MainWindow::AppendLog(const QString& line) {
   if (!log_view_) return;
-  log_view_->append(line);
+  // appendPlainText 不做富文本解析,识别结果里的 '<' '&' 不会被当成标记。
+  log_view_->appendPlainText(line);
   log_view_->verticalScrollBar()->setValue(
       log_view_->verticalScrollBar()->maximum());
 }
@@ -162,7 +194,7 @@ void MainWindow::AppendLog(const QString& line) {
 void MainWindow::AppendResult(const QString& text) {
   if (!result_view_) return;
   const QString ts = QTime::currentTime().toString(QStringLiteral("HH:mm:ss"));
-  result_view_->append(QStringLiteral("[%1] %2").arg(ts, text));
+  result_view_->appendPlainText(QStringLiteral("[%1] %2").arg(ts, text));
   result_view_->verticalScrollBar()->setValue(
       result_view_->verticalScrollBar()->maximum());
 }

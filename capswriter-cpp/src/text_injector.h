@@ -12,6 +12,10 @@ bool InjectUtf8Text(const std::string& utf8);
 // restores the previous clipboard content (mirrors TextOutput._paste_text).
 bool PasteUtf8Text(const std::string& utf8, bool restore_clip);
 
+// Writes UTF-8 text to the clipboard without pasting. Used as the fallback
+// when the hotkey fires outside a text input (no box to type into).
+bool CopyUtf8Text(const std::string& utf8);
+
 // Presses and releases the Enter key (mirrors _auto_enter).
 void SendEnterKey();
 

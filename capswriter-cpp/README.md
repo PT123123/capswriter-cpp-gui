@@ -1,5 +1,12 @@
 # CapsWriter C++ 客户端
 
+> **本项目参考了 [CapsWriter-Offline](https://github.com/HaujetZhao/CapsWriter-Offline)
+> （v2.6，作者 HaujetZhao），用 C++ 重写了其「按住说话、松开上屏」的听写链路。**
+> 原版是 Python 服务端/客户端（C/S）架构；本项目的功能语义、配置字段、模型选择
+> 与规则格式均以其为参照，识别与标点模型亦取自原版发布的模型包（见下文
+> 「模型来源」）。原版的核心特性——**完全离线、低延迟、高准确率、高度自定义
+> 的热词/规则替换**——在本项目中保持对齐。
+
 CapsWriter-Offline（v2.6）听写功能的纯 C++ 实现：按住热键说话、松开识别、
 自动上屏。与原 Python 版本相比，它**不启动 Python 服务端、不走 WebSocket**，
 而是通过 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 的 C API 在
@@ -17,8 +24,6 @@ CapsWriter-Offline（v2.6）听写功能的纯 C++ 实现：按住热键说话�
 | 规则替换 | `hot-rule.txt` 正则替换（`RuleCorrector`） | 同格式规则文件 + `std::regex`，文件改动自动热重载 |
 | 繁体转换 | `zhconv`（词语级） | `LCMapStringW` 逐字转换（`zh-hant`/`zh-tw`/`zh-hk` 统一处理，词语级差异不覆盖） |
 | 自动回车 | `enter_apps` | 同语义（按应用匹配，延迟后补发 Enter） |
-| 录音保存 | `save_audio`（48kHz MP3/WAV，依赖 FFmpeg） | 16 kHz 单声道 WAV（识别用音频直接落盘，无 FFmpeg 依赖），按识别文本重命名 |
-| 日记归档 | `DiaryWriter`（`YYYY/MM/DD.md`） | 同目录结构、同文件头模板、同条目格式，与原项目日记互通 |
 | UDP 广播 | `udp_broadcast` | 同语义（`SO_BROADCAST` 多目标发送） |
 | UDP 控制 | `udp_control`（START/STOP） | 同协议（监听端口收命令启停录音） |
 | Qt 托盘 GUI | — | 无边框暗色窗口 + 系统托盘，与原版 `tray_gui.py` 视觉对齐；日志与识别结果分别在两个标签页实时显示（见 `gui/`） |
@@ -38,7 +43,9 @@ CapsWriter-Offline（v2.6）听写功能的纯 C++ 实现：按住热键说话�
 - 识别与上屏全部在工作线程执行，不阻塞低级钩子（避免系统因钩子超时摘除监听）
 
 未移植（后续可选）：音素级热词 RAG（`hot.txt`，可用 `asr.hotwords_file`
-上下文加权部分替代）、LLM 润色、文件转录、60 秒分段听写（长音频整段识别）。
+上下文加权部分替代）、数字 ITN 格式化（「十五六个」→「15~16个」）、
+LLM 角色润色、文件转录（拖拽音视频出字幕/文本/时间戳）、托盘菜单热词管理、
+60 秒分段听写（长音频整段识别）。
 
 ## 构建（MSVC + CMake）
 
@@ -109,8 +116,7 @@ CapsWriter-Offline（v2.6）听写功能的纯 C++ 实现：按住热键说话�
 - `trash_punc` / `trash_punc_thresh` / `trash_punc_apps`：末尾标点消除。
 - `traditional_convert` / `traditional_locale`：繁体转换（逐字）。
 - `hot_rule` / `rule_file`：`hot-rule.txt` 正则替换与热重载。
-- `save_audio` / `audio_name_len` / `data_root`：录音保存（16 kHz WAV，
-  按识别文本重命名）与日记归档目录。
+- 录音保存（`save_audio`）与日记归档已移除：识别音频仅在内存中处理，不会在本地落盘。
 - `udp_broadcast` / `udp_broadcast_targets`：识别结果 UDP 广播。
 - `udp_control` / `udp_control_addr` / `udp_control_port`：
   外部程序向该端口发送 `START` / `STOP` 控制录音。
@@ -124,6 +130,27 @@ CapsWriter-Offline（v2.6）听写功能的纯 C++ 实现：按住热键说话�
 
 代码面向 sherpa-onnx 1.10.x 及之后的稳定 C API 编写。若所选预编译版的
 `c-api.h` 有出入，编译错误会直接指向 `asr_engine.cpp`，按该头文件微调即可。
+
+## 模型来源
+
+本项目两个模型与参考项目 **CapsWriter-Offline** 使用的完全相同，模型包
+即取自其发布的 [Models Release](https://github.com/HaujetZhao/CapsWriter-Offline/releases/tag/models)
+（v1.0 模型包），本地 `models/` 目录结构与其保持一致：
+
+| 用途 | 模型 | 本地目录 | 需要文件 | 来源 |
+| --- | --- | --- | --- | --- |
+| 语音识别（ASR） | Paraformer **int8 量化版** | `models/paraformer-offline-zh/` | `model.int8.onnx` + `tokens.txt` + `am.mvn`（+ `config.yaml`） | [sherpa-onnx-paraformer-zh-2023-09-14](https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14)（`git clone` 后仅保留上述文件） |
+| 标点恢复（PUNC） | Punct-CT-Transformer（fp32） | `models/Punct-CT-Transformer/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12/` | `model.onnx` + `tokens.json`（+ `config.yaml`） | [CapsWriter-Offline v1.0 模型包](https://github.com/HaujetZhao/CapsWriter-Offline/releases/tag/v1.0)（或[百度网盘 提取码 eu4c](https://pan.baidu.com/s/1zNHstoWZDJVynCBz2yS9vg)） |
+
+下载后按表放回对应目录即可，`config.yaml` 的 `asr.*` / `punct.model` 已默认
+指向这些路径（`model_root: ../..` 相对 exe 所在目录 `build/Release/` 解析）。
+
+**为什么是这两个模型**（参考原版 README 的引擎对比）：原版支持 Paraformer、
+SenseVoice-Small、Fun-ASR-Nano、Qwen3-ASR 等多引擎，本项目选用与原版默认一致
+的 Paraformer + CT-Transformer 组合——Paraformer 是其中**延迟最低**的引擎
+（原版实测 20s 音频 CPU 转录约 0.6s，ONNX 格式、CPU 即可跑，无需显卡），
+配合 CT-Transformer 做标点恢复，完全离线运行。若日后需要更高准确率或显卡加速，
+可参考原版 README 换用 Qwen3-ASR / SenseVoice 等引擎（对应 sherpa-onnx 亦支持）。
 
 ## 模型精简与恢复
 
@@ -156,3 +183,17 @@ CapsWriter-Offline（v2.6）听写功能的纯 C++ 实现：按住热键说话�
   `hot-rule.txt` 迁入本项目；`qt-tray-gui/`、`qt-tray-icon-ui/` 已由用户自行删除。
 - 2026-08-31（本次）：ASR 切换为 int8 量化版并迁入本项目，删除 fp32 原版
   与根目录 `models/` 全部内容，根目录 `models/` 文件夹已移除。
+
+## 常见问题（FAQ）
+
+以下要点参考自原版 [CapsWriter-Offline](https://github.com/HaujetZhao/CapsWriter-Offline)
+README，行为与本项目一致：
+
+- **为什么按了没反应？** 确认 `capswriter.exe` / `capswriter-gui.exe` 进程还在
+  运行；若要在以管理员权限运行的程序（如部分编辑器/终端）中输入，本程序也
+  需以管理员权限启动。
+- **识别结果没字？** 确认麦克风是否录到音（建议桌面 USB 麦克风）、Windows
+  麦克风权限是否已开启。程序不保存录音文件，无法事后回放排查。
+- **如何开机自启？** `Win+R` 输入 `shell:startup` 打开启动文件夹，放入
+  `capswriter-gui.exe` 的快捷方式即可（托盘版无黑窗口，更适合常驻）。
+- **平台支持？** 与原版相同，仅保证 Windows 10/11（64 位）下运行。

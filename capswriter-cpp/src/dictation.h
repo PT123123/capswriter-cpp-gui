@@ -11,19 +11,37 @@
 
 #include "asr_engine.h"
 #include "audio_recorder.h"
-#include "audio_store.h"
 #include "config.h"
-#include "diary.h"
 #include "text_transform.h"
 #include "udp_io.h"
 
 namespace capswriter {
 
+// How the recognized text reached the user. Reported through the event
+// callback so the frontend can show an appropriate hint.
+enum class OutputKind { kTyped, kPasted, kCopied };
+
+// High-level lifecycle events of a dictation round, consumed by the GUI
+// hint bar (and any future frontend). Fired on the hotkey hook thread
+// (kRecordingStarted) or the pipeline worker thread (the rest).
+enum class DictationEvent {
+  kRecordingStarted,  // recording began -> "typing in progress" hint
+  kRecordingEnded,    // cancelled / no audio / no speech -> hide hint
+  kTextOutput,        // text delivered; see OutputKind for how
+  kOutputFailed,      // text recognized but could not be delivered
+};
+
+// Observer notified of dictation lifecycle events. The text is the final
+// post-processed result (non-empty only for kTextOutput).
+using DictationEventCallback =
+    std::function<void(DictationEvent ev, OutputKind kind,
+                       const std::string& text)>;
+
 // Owns the full dictation pipeline: recording, recognition, post-processing
 // (traditional conversion, trailing punctuation removal, rule substitution),
-// output (typing / pasting / auto Enter), UDP broadcast, recording archival
-// and diary writing. Replaces ResultProcessor + AudioStreamManager +
-// AudioFileManager + DiaryWriter wiring of the Python client.
+// output (typing / pasting / auto Enter) and UDP broadcast. Replaces
+// ResultProcessor + AudioStreamManager + AudioFileManager + DiaryWriter
+// wiring of the Python client.
 //
 // StartRecording() is called from the hotkey hook thread or the UDP control
 // thread; FinishRecording()/CancelRecording() return immediately and run the
@@ -63,6 +81,14 @@ class DictationController {
     result_callback_ = std::move(cb);
   }
 
+  // Optional observer notified of dictation lifecycle events (recording
+  // start/end, text output, output failure). May be called from the hook
+  // thread and the pipeline worker thread; frontends must marshal to their
+  // own UI thread.
+  void set_event_callback(DictationEventCallback cb) {
+    event_callback_ = std::move(cb);
+  }
+
   // Joins the worker thread (for shutdown).
   void Stop();
 
@@ -73,8 +99,6 @@ class DictationController {
   AsrEngine* engine_;
 
   WasapiRecorder recorder_;
-  std::unique_ptr<AudioStore> audio_store_;
-  std::unique_ptr<DiaryWriter> diary_;
   std::unique_ptr<UdpBroadcaster> broadcaster_;
   RuleCorrector rules_;
 
@@ -85,6 +109,7 @@ class DictationController {
   std::chrono::steady_clock::time_point start_time_{};
   std::time_t time_start_ = 0;
   std::function<void(const std::string&)> result_callback_;
+  DictationEventCallback event_callback_;
 };
 
 }  // namespace capswriter

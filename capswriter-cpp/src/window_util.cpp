@@ -1,6 +1,11 @@
 #include "window_util.h"
 
 #include <windows.h>
+// WIN32_LEAN_AND_MEAN 下 windows.h 不会引入 COM 头，导致 uiautomation.h
+// 依赖的 `interface` 宏未定义（UIAutomationCore.h 用 typedef interface ...）。
+// combaseapi.h 是 interface / IUnknown 的正式定义处，必须先于 uiautomation.h 包含。
+#include <combaseapi.h>
+#include <uiautomation.h>
 
 #include <vector>
 
@@ -75,6 +80,192 @@ std::string GetForegroundProcessName() {
     if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
   }
   return name;
+}
+
+namespace {
+
+// Window classes whose focused control is (almost always) a text input.
+// Case-insensitive; entries ending in a '.' also match longer dotted
+// variants (e.g. "WindowsForms10.EDIT.app.0.378734a").
+bool IsKnownEditClass(const std::wstring& cls) {
+  static const wchar_t* kKnown[] = {
+      L"Edit",            // Notepad, dialogs, old apps
+      L"RichEdit",        L"RichEdit20A", L"RichEdit20W", L"RichEdit50W",
+      L"RICHEDIT",        // WordPad / IME-adjacent rich text
+      L"Scintilla",       // Notepad++, some editors
+      L"QLineEdit",       L"QTextEdit", L"QPlainTextEdit", L"QTextBrowser",
+      L"Qt6QLineEdit",    L"Qt6QTextEdit", L"Qt6QPlainTextEdit",
+      L"Qt6QTextBrowser", // Qt apps
+      L"ConsoleWindowClass",                // legacy conhost
+      L"CASCADIA_HOSTING_WINDOW_CLASS",     // Windows Terminal
+      L"Chrome_RenderWidgetHostHWND",       // Chromium web content
+      L"Chrome_WidgetWin_1",                // Chromium top-level frames
+      L"MozillaWindowClass", L"MozillaWindowClass2",  // Firefox
+      L"WindowsForms10.EDIT.", L"WindowsForms10.RichEdit.",  // WinForms
+  };
+  for (const wchar_t* k : kKnown) {
+    const size_t len = wcslen(k);
+    if (wcsncmp(cls.c_str(), k, len) != 0) continue;
+    if (len > 0 && k[len - 1] == L'.') return true;   // dotted prefix match
+    if (cls.size() == len) return true;               // exact match
+  }
+  return false;
+}
+
+// Window classes that are definitely NOT text inputs; short-circuits the
+// more expensive fallbacks (caret / UI Automation).
+bool IsNonEditClass(const std::wstring& cls) {
+  static const wchar_t* kNonEdit[] = {
+      L"Button",         L"Static",         L"ScrollBar",
+      L"ToolbarWindow32", L"msctls_statusbar32", L"msctls_trackbar32",
+      L"SysListView32",  L"SysTreeView32",  L"SysHeader32",
+      L"tooltips_class32", L"IME",           L"Shell_TrayWnd",
+      L"Progman",        L"WorkerW",        L"#32770",
+  };
+  for (const wchar_t* k : kNonEdit) {
+    if (_wcsicmp(cls.c_str(), k) == 0) return true;
+  }
+  return false;
+}
+
+// Shared "is this UIA element a text input?" check. Treats Edit and Document
+// controls as editable; for shells (ComboBox/Custom/Pane/Group/TabItem/List)
+// it requires a Value pattern that is not read-only — read-only fields also
+// expose Value, but IsReadOnly tells them apart.
+bool IsElementEditable(IUIAutomationElement* el) {
+  CONTROLTYPEID type =
+      0;  // UIA_UnknownControlTypeId (removed in SDK 10.0.26100+)
+  if (FAILED(el->get_CurrentControlType(&type))) return false;
+  if (type == UIA_EditControlTypeId || type == UIA_DocumentControlTypeId) {
+    return true;
+  }
+  if (type == UIA_ComboBoxControlTypeId || type == UIA_CustomControlTypeId ||
+      type == UIA_PaneControlTypeId || type == UIA_GroupControlTypeId ||
+      type == UIA_TabItemControlTypeId || type == UIA_ListControlTypeId) {
+    IUnknown* pattern = nullptr;
+    if (SUCCEEDED(el->GetCurrentPattern(UIA_ValuePatternId, &pattern)) &&
+        pattern) {
+      IUIAutomationValuePattern* vp = nullptr;
+      const bool has_vp =
+          SUCCEEDED(pattern->QueryInterface(IID_IUIAutomationValuePattern,
+                                            reinterpret_cast<void**>(&vp))) &&
+          vp;
+      pattern->Release();
+      if (has_vp) {
+        BOOL read_only = TRUE;
+        vp->get_CurrentIsReadOnly(&read_only);
+        const bool editable = !read_only;
+        vp->Release();
+        return editable;
+      }
+    }
+  }
+  return false;
+}
+
+// UI Automation fallback for custom / shell-rendered controls (Chrome,
+// Edge, VS Code, Word, WeChat, ...). Checks the element under `hwnd`.
+//
+// Note: COM may already be initialized on this thread in another apartment
+// mode (CoInitializeEx returns RPC_E_CHANGED_MODE). That does NOT make UIA
+// unusable — the process-wide automation server adapts — so we only skip
+// CoUninitialize in that case instead of bailing out.
+bool IsEditableByUia(HWND hwnd) {
+  bool editable = false;
+  HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  // RPC_E_CHANGED_MODE / S_FALSE: COM already initialized here; usable.
+  const bool need_uninit = (hr == S_OK);
+
+  IUIAutomation* uia = nullptr;
+  if (SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr,
+                                 CLSCTX_INPROC_SERVER, IID_IUIAutomation,
+                                 reinterpret_cast<void**>(&uia)))) {
+    IUIAutomationElement* el = nullptr;
+    if (SUCCEEDED(uia->ElementFromHandle(hwnd, &el)) && el) {
+      editable = IsElementEditable(el);
+      el->Release();
+    }
+    uia->Release();
+  }
+  if (need_uninit) CoUninitialize();
+  return editable;
+}
+
+// Asks UIA directly which element owns the keyboard focus. More reliable
+// than the class/caret heuristics for self-drawn UIs (Electron, Qt Quick,
+// modern IMEs, ...) whose focused control is not a classic edit class and
+// does not blink the system caret: GetFocusedElement returns the inner text
+// field instead of the top-level HWND.
+bool IsUiaFocusedElementEditable() {
+  bool editable = false;
+  HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  const bool need_uninit = (hr == S_OK);
+
+  IUIAutomation* uia = nullptr;
+  if (SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr,
+                                 CLSCTX_INPROC_SERVER, IID_IUIAutomation,
+                                 reinterpret_cast<void**>(&uia)))) {
+    IUIAutomationElement* el = nullptr;
+    if (SUCCEEDED(uia->GetFocusedElement(&el)) && el) {
+      editable = IsElementEditable(el);
+      el->Release();
+    }
+    uia->Release();
+  }
+  if (need_uninit) CoUninitialize();
+  return editable;
+}
+
+}  // namespace
+
+bool HasTextInputFocus() {
+  HWND fg = GetForegroundWindow();
+  if (!fg) return false;
+
+  // Fast path: inspect the focused control of the foreground thread. Covers
+  // classic Win32 edit controls (and known shells) without touching UIA.
+  const DWORD tid = GetWindowThreadProcessId(fg, nullptr);
+  if (tid) {
+    GUITHREADINFO gti{sizeof(GUITHREADINFO)};
+    if (GetGUIThreadInfo(tid, &gti) && gti.hwndFocus) {
+      wchar_t cls_buf[128]{};
+      GetClassNameW(gti.hwndFocus, cls_buf, 128);
+      const std::wstring cls(cls_buf);
+
+      if (IsKnownEditClass(cls)) return true;
+      if (IsNonEditClass(cls)) return false;
+      // A visible blinking caret is a strong "text is being edited" signal
+      // and covers custom grids (Excel) and shells that lack a
+      // recognizable class.
+      if (gti.flags & GUI_CARETBLINKING) return true;
+      // Unrecognized class: ask UIA, first about the focused control, then
+      // about the UIA focused element (self-drawn UIs report the inner text
+      // field, not the top-level HWND).
+      if (IsEditableByUia(gti.hwndFocus)) return true;
+      return IsUiaFocusedElementEditable();
+    }
+  }
+
+  // No usable GUI-thread info (UWP, remote sessions, some odd apps): ask
+  // UIA which element owns the keyboard focus.
+  return IsUiaFocusedElementEditable();
+}
+
+bool GetCaretScreenRect(RECT* out) {
+  if (!out) return false;
+  HWND fg = GetForegroundWindow();
+  if (!fg) return false;
+  const DWORD tid = GetWindowThreadProcessId(fg, nullptr);
+  GUITHREADINFO gti{sizeof(GUITHREADINFO)};
+  if (!tid || !GetGUIThreadInfo(tid, &gti)) return false;
+  // The caret must be owned by the focused thread and have a nonzero size.
+  if (!gti.hwndCaret && !(gti.flags & GUI_CARETBLINKING)) return false;
+  if (gti.rcCaret.right <= gti.rcCaret.left ||
+      gti.rcCaret.bottom <= gti.rcCaret.top) {
+    return false;
+  }
+  *out = gti.rcCaret;  // GUITHREADINFO.rcCaret is in screen coordinates
+  return true;
 }
 
 int CountSemanticUnits(const std::string& utf8) {
