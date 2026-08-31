@@ -5,9 +5,10 @@
 //
 // 线程模型:
 //  - 主线程:Qt 事件循环,窗口/托盘,以及一个 100ms 的定时器从线程
-//    安全队列取日志行/识别结果刷新界面
-//  - 加载线程:加载配置与模型(约 3s,不阻塞托盘出现),完成后回到
-//    主线程装钩子(钩子线程由 HotkeyListener 自管,不占 Qt 循环)
+//    安全队列取日志行/识别结果/未就绪提示刷新界面
+//  - 加载线程:先装好键盘/鼠标钩子(很快),再加载配置与模型(约 3s,
+//    不阻塞托盘出现);加载期间按快捷键会被 HotkeyDispatch 拦下并提示,
+//    而不是被静默吞掉。钩子线程由 HotkeyListener 自管,不占 Qt 循环。
 //  - 识别线程:DictationController 的 worker(核心库自管)
 
 #include <windows.h>
@@ -19,6 +20,7 @@
 #include <QFileInfo>
 #include <QMessageLogContext>
 #include <QMessageBox>
+#include <QProcess>
 #include <QScreen>
 #include <QTimer>
 
@@ -37,6 +39,7 @@
 #include "../src/instance_guard.h"
 #include "../src/log.h"
 #include "../src/udp_io.h"
+#include "crash_handler.h"
 
 #include "app_icons.h"
 #include "main_window.h"
@@ -83,6 +86,10 @@ class EventQueue {
     std::lock_guard<std::mutex> lock(mutex_);
     events_.push_back({ev, kind, std::move(text)});
   }
+  void PushIgnored(std::string text) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ignored_.push_back(std::move(text));
+  }
   std::vector<std::string> DrainLogs() {
     std::lock_guard<std::mutex> lock(mutex_);
     return std::move(log_lines_);
@@ -95,12 +102,17 @@ class EventQueue {
     std::lock_guard<std::mutex> lock(mutex_);
     return std::move(events_);
   }
+  std::vector<std::string> DrainIgnored() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::move(ignored_);
+  }
 
  private:
   std::mutex mutex_;
   std::vector<std::string> log_lines_;
   std::vector<std::string> results_;
   std::vector<HintEvent> events_;
+  std::vector<std::string> ignored_;
 };
 
 // 把核心事件翻译成提示条文案。只使用 emoji + 文字,不引入任何图片。
@@ -143,9 +155,19 @@ struct AppRuntime {
   std::unique_ptr<HotkeyListener> listener;
   std::unique_ptr<UdpController> udp;
   std::vector<HotkeyDef> hotkey_defs;
-  // 加载线程置位、主线程读取:用于把托盘图标从"加载中"切回"待命"。
+  // `ready` 是持续标志:引擎加载完成后置 true,此后一直为 true(供
+  // HotkeyDispatch 每次按键时读取,判断引擎是否可用)。不要被主线程定时器
+  // 消费/清零——否则会出现"日志显示已就绪,但快捷键一直被忽略"的 bug。
+  // `ready_event` 是一次性信号:加载完成时置位,主线程定时器消费一次后清零,
+  // 仅用于把托盘图标从"加载中"切回"待命"。
   std::atomic<bool> ready{false};
+  std::atomic<bool> ready_event{false};
   std::atomic<bool> failed{false};
+
+  // 加载线程在 Init 前设置:当热键在引擎未就绪时被按下,通过这个回调把
+  // 原因推送给 UI(弹提示条),而不是让用户"按了没反应"。
+  std::function<void(const std::string&)> on_ignored_;
+  std::function<std::string()> ready_reason_;
 
   bool Init(const std::string& config_path, std::string* err) {
     if (!config.LoadFromFile(config_path, err)) return false;
@@ -153,7 +175,10 @@ struct AppRuntime {
     LOG_INFO("Loaded config: %s", config_path.c_str());
 
     engine = std::make_unique<AsrEngine>();
-    if (!engine->Init(config, err)) return false;
+    // 钩子在「较慢的」模型加载之前就装好:这样加载模型那几秒里用户按快捷键,
+    // 也能被 HotkeyDispatch 拦下并给出"正在加载"的提示,而不是毫无反应。
+    // HotkeyDispatch 每次动作前都检查 `ready`,所以在模型真正加载完成前,
+    // 不会去碰尚未初始化的识别器。
 
     for (const ShortcutConfig& sc : config.shortcuts) {
       if (!sc.enabled) continue;
@@ -172,7 +197,9 @@ struct AppRuntime {
     }
 
     controller = std::make_unique<DictationController>(config, engine.get());
-    dispatch = std::make_unique<HotkeyDispatch>(config, controller.get());
+    dispatch = std::make_unique<HotkeyDispatch>(config, controller.get(), &ready);
+    if (ready_reason_) dispatch->SetReadyReason(ready_reason_);
+    if (on_ignored_) dispatch->SetOnIgnored(on_ignored_);
 
     listener = std::make_unique<HotkeyListener>();
     listener->SetHotkeys(hotkey_defs);
@@ -180,6 +207,10 @@ struct AppRuntime {
       dispatch->Handle(def, is_down);
     });
     if (!listener->Start(err)) return false;
+
+    // 钩子已生效;下面才是真正耗时的模型加载。加载期间按快捷键会走
+    // HotkeyDispatch 的"未就绪"分支并提示用户。
+    if (!engine->Init(config, err)) return false;
 
     if (config.udp_control) {
       udp = std::make_unique<UdpController>(
@@ -253,6 +284,10 @@ int main(int argc, char* argv[]) {
     FILE* unused = nullptr;
     freopen_s(&unused, "CONOUT$", "w", stderr);
   }
+
+  // Crash diagnostics: a throw on the loader/recognition worker thread would
+  // otherwise kill the process silently. Install before any model load.
+  InstallCrashHandlers();
 
   // 任务栏图标:没有安装程序的便携软件默认会被 Windows 归进通用分组,
   // 显式声明 AppUserModelID 才能让任务栏按钮使用程序自己的图标。
@@ -355,10 +390,13 @@ int main(int argc, char* argv[]) {
       window.AppendResult(QString::fromUtf8(text.c_str()));
     }
     // 托盘图标跟随运行时状态:加载完成切回待命,初始化失败显示出错。
+    // 注意:这里消费的是一次性信号 ready_event,绝不要动持续的 ready 标志——
+    // ready 是 HotkeyDispatch 判断引擎是否可用的依据,被清零会导致快捷键
+    // 在"日志已显示就绪"后依然被永久忽略。
     if (tray_ptr) {
       if (rt->failed.exchange(false)) {
         tray_ptr->SetState(TrayIconState::kError);
-      } else if (rt->ready.exchange(false)) {
+      } else if (rt->ready_event.exchange(false)) {
         tray_ptr->SetState(TrayIconState::kIdle);
       }
     }
@@ -371,6 +409,13 @@ int main(int argc, char* argv[]) {
     } else {
       // 关闭提示条时丢弃事件并隐藏(但状态更新仍然继续)。
       toast.Hide();
+    }
+
+    // 引擎未就绪时按了快捷键:把原因提示出来(来源 HotkeyDispatch::on_ignored),
+    // 否则用户会"按了没反应"却不知道为什么。即便关闭了普通提示条也照常显示。
+    for (const std::string& text : queue.DrainIgnored()) {
+      toast.Show(QString::fromUtf8(("⏳ " + text + "（再按快捷键无效）").c_str()),
+                 2500);
     }
 
     // 无论是否显示提示条,托盘图标都跟随录音状态。
@@ -394,6 +439,23 @@ int main(int argc, char* argv[]) {
   // ---- 后台加载核心运行时(模型约 3s,不阻塞托盘出现) ----
   std::thread loader([&queue, rt, config_path, &window, &toast,
                       screenshot_path]() {
+    try {
+    // 引擎未就绪时按键的反馈:给出详细原因,并(限频 3s)弹提示条,
+    // 否则用户会"按了快捷键却毫无反应"。在 Init 之前设好,因为钩子
+    // 现已在模型加载前装好,加载期间就可能触发。
+    rt->ready_reason_ = [rt]() -> std::string {
+      if (rt->failed.load())
+        return "语音引擎初始化失败，请查看弹出的错误提示与日志";
+      return "语音引擎正在加载模型（首次启动约需几秒），请稍候再按快捷键";
+    };
+    rt->on_ignored_ = [&queue](const std::string& reason) {
+      static std::chrono::steady_clock::time_point last{};
+      auto now = std::chrono::steady_clock::now();
+      if (std::chrono::duration<double>(now - last).count() < 3.0) return;
+      last = now;
+      queue.PushIgnored(reason);
+    };
+
     std::string err;
     if (!rt->Init(config_path, &err)) {
       LOG_ERROR("Init failed: %s", err.c_str());
@@ -417,8 +479,20 @@ int main(int argc, char* argv[]) {
         [&queue](DictationEvent ev, OutputKind kind, const std::string& text) {
           queue.PushEvent(ev, kind, text);
         });
-    rt->ready = true;  // 主线程据此把托盘图标从"加载中"切回"待命"。
-    LOG_INFO("CapsWriter C++ (GUI) is ready. Hold the hotkey, speak, release.");
+    rt->ready = true;  // 持续的"引擎已就绪"标志:HotkeyDispatch 据此放行快捷键。
+    rt->ready_event = true;  // 一次性信号:让主线程把托盘图标从"加载中"切回"待命"。
+    LOG_INFO("CapsWriter 已就绪：语音引擎加载完成。按住快捷键说话，松开后识别。");
+
+    // 回退提示:所选模型不可用、实际加载了别的模型时,启动期明确告知用户
+    // (设置页也有"当前生效/所选"比对标签,但启动时不弹就容易被忽略)。
+    if (!rt->engine->fallback_notice().empty()) {
+      const std::string notice = rt->engine->fallback_notice();
+      LOG_WARN("Model fallback: %s", notice.c_str());
+      QMetaObject::invokeMethod(qApp, [rt, &window, notice] {
+        QMessageBox::warning(&window, QStringLiteral("CapsWriter-Offline"),
+                             QString::fromUtf8(notice.c_str()));
+      });
+    }
 
     if (!screenshot_path.isEmpty()) {
       QMetaObject::invokeMethod(qApp, [&window, &toast, screenshot_path]() {
@@ -456,11 +530,31 @@ int main(int argc, char* argv[]) {
         });
       });
     }
+  } catch (const std::exception& e) {
+    LOG_ERROR("Loader thread threw: %s", e.what());
+    rt->failed = true;
+  } catch (...) {
+    LOG_ERROR("Loader thread threw (unknown exception type)");
+    rt->failed = true;
+  }
   });
 
   // 截图模式不需要托盘;正常模式托盘不可用则退出(与原程序一致)。
   if (screenshot_path.isEmpty()) {
-    TrayController tray(&window, &rt->config, config_path);
+    // Restart helper: on a model switch the settings dialog offers to restart.
+    // We release the single-instance mutex first so the freshly-started process
+    // can claim it (a same-version second instance would otherwise just
+    // re-activate this one and exit), then launch it and quit this instance.
+    auto restart_app = [&guard, &app]() {
+      guard.Release();
+      const QString exe = QApplication::applicationFilePath();
+      // Drop argv[0] (program path); startDetached re-adds the program name.
+      QProcess::startDetached(exe, QApplication::arguments().mid(1));
+      QApplication::quit();
+    };
+
+    TrayController tray(&window, &rt->config, config_path, rt->engine.get(),
+                        restart_app);
     // 模型加载约 3s,托盘先显示"加载中"状态,就绪后定时器切回"待命"。
     tray.SetState(TrayIconState::kBusy);
     if (!tray.Initialize()) {

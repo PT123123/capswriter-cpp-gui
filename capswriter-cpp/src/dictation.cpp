@@ -99,6 +99,22 @@ void DictationController::Stop() {
 }
 
 void DictationController::RunPipeline(bool recognize) {
+  // Run on a worker thread with no C++ exception safety net: any throw here
+  // would escape std::thread and call std::terminate -> abort (0xc0000409)
+  // with no log. Catch it so a bad text/rule/injector step fails gracefully
+  // and is recorded instead of silently crashing the app.
+  try {
+    RunPipelineImpl(recognize);
+  } catch (const std::exception& e) {
+    LOG_ERROR("RunPipeline threw (uncaught exception): %s", e.what());
+    busy_.store(false);
+  } catch (...) {
+    LOG_ERROR("RunPipeline threw (unknown exception type)");
+    busy_.store(false);
+  }
+}
+
+void DictationController::RunPipelineImpl(bool recognize) {
   std::vector<float> samples = recorder_.Stop();
   const int sample_rate = recorder_.target_sample_rate();
   busy_.store(true);  // stays set until the pipeline finishes

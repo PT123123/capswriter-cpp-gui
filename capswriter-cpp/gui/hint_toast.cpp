@@ -38,6 +38,47 @@ void EnsureClassRegistered() {
   (void)done;
 }
 
+// Per-monitor DPI scale relative to 96 DPI (= 100%). Requires the process to
+// be per-monitor DPI aware for the true value (Qt6 enables this); otherwise
+// GetDpiForMonitor reports the system DPI and we still fall back gracefully.
+// Resolved via GetProcAddress so we don't hard-link shcore.dll.
+qreal DpiScaleForMonitor(HMONITOR mon) {
+  if (mon) {
+    using GetDpiForMonitorFn =
+        HRESULT(WINAPI*)(HMONITOR, int /*MONITOR_DPI_TYPE*/, UINT*, UINT*);
+    static const auto fn = []() -> GetDpiForMonitorFn {
+      HMODULE shcore = GetModuleHandleW(L"shcore.dll");
+      return shcore ? reinterpret_cast<GetDpiForMonitorFn>(
+                          GetProcAddress(shcore, "GetDpiForMonitor"))
+                    : nullptr;
+    }();
+    UINT dpi_x = 96, dpi_y = 96;
+    if (fn && fn(mon, /*MDT_EFFECTIVE_DPI*/ 0, &dpi_x, &dpi_y) == S_OK &&
+        dpi_x > 0) {
+      return dpi_x / 96.0;
+    }
+  }
+  // Fallback: system DPI (the old behavior).
+  HDC dc = GetDC(nullptr);
+  const int dpi = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 96;
+  if (dc) ReleaseDC(nullptr, dc);
+  return dpi > 0 ? dpi / 96.0 : 1.0;
+}
+
+// Resolution-aware scale so the hint isn't a postage stamp on dense panels.
+// A 1080p display at 100% scaling is the 1.0 baseline; taller (physically
+// higher-pixel) screens get a proportionally larger toast, clamped to a sane
+// range so 4K/8K panels don't blow it up unnecessarily.
+qreal ResolutionScaleForMonitor(HMONITOR mon) {
+  MONITORINFOEXW mi{};
+  mi.cbSize = sizeof(mi);
+  if (!mon || !GetMonitorInfoW(mon, &mi)) return 1.0;
+  const int height_px = mi.rcMonitor.bottom - mi.rcMonitor.top;
+  if (height_px <= 0) return 1.0;
+  const qreal k = static_cast<qreal>(height_px) / 1080.0;
+  return qBound(1.0, k, 2.0);
+}
+
 }  // namespace
 
 HintToast::HintToast(QObject* parent) : QObject(parent) {
@@ -108,21 +149,13 @@ void HintToast::Tick() {
 }
 
 void HintToast::Render(const QString& text) {
-  // Scale the toast with the DPI of the screen under the caret/cursor so it
-  // matches the rest of the UI on high-DPI displays.
-  RECT caret{};
-  POINT cursor{};
-  QPoint ref;
-  if (GetCaretScreenRect(&caret)) {
-    ref = QPoint(caret.left, caret.bottom);
-  } else {
-    GetCursorPos(&cursor);
-    ref = QPoint(cursor.x, cursor.y);
-  }
-  HDC screen_dc = GetDC(nullptr);
-  const int dpi = screen_dc ? GetDeviceCaps(screen_dc, LOGPIXELSX) : 96;
-  if (screen_dc) ReleaseDC(nullptr, screen_dc);
-  const qreal scale = dpi / 96.0;
+  // Size the toast for the monitor it will actually appear on (the caret, or
+  // the cursor as a fallback). We measure that point's monitor and scale the
+  // font/padding/radius so the hint is a comfortable, consistent size on
+  // every display — instead of always using the primary monitor's DPI, which
+  // made it look tiny on high-DPI / high-resolution secondary screens.
+  const QPoint ref = ReferencePoint();
+  const qreal scale = ToastScaleForPoint(ref);
 
   QFont font;
   font.setPixelSize(qRound(14 * scale));
@@ -149,6 +182,25 @@ void HintToast::Render(const QString& text) {
   p.drawText(rect.adjusted(pad_x, 0, -pad_x, 0), Qt::AlignVCenter | Qt::AlignLeft,
              text);
   p.end();
+}
+
+QPoint HintToast::ReferencePoint() const {
+  if (anchor_override_) return *anchor_override_;
+  RECT caret{};
+  if (GetCaretScreenRect(&caret)) {
+    return QPoint(caret.left, caret.bottom);
+  }
+  POINT cursor{};
+  GetCursorPos(&cursor);
+  return QPoint(cursor.x, cursor.y);
+}
+
+qreal HintToast::ToastScaleForPoint(const QPoint& ref) const {
+  const HMONITOR mon =
+      MonitorFromPoint({ref.x(), ref.y()}, MONITOR_DEFAULTTONEAREST);
+  // Take the larger of the two so a high-DPI OR a high-resolution screen
+  // both get a comfortably sized toast, and it never shrinks below 1.0.
+  return qMax(DpiScaleForMonitor(mon), ResolutionScaleForMonitor(mon));
 }
 
 QPoint HintToast::ComputePosition() const {

@@ -70,6 +70,11 @@ class InstanceGuard {
   // 因此本函数对控制台实例返回 false（找不到可投递的窗口）。
   bool ActivateExisting();
 
+  // 显式释放互斥体句柄（CloseHandle）。本类无析构函数，正常退出交由 OS 回收；
+  // 但"重启程序"时需要让新进程能认领互斥体，故由重启流程在退出前主动释放。
+  // 幂等：句柄已释放/为空时静默返回。
+  void Release();
+
   // 跨进程注册的"显示主窗口"消息 ID。两个进程各自调用
   // RegisterWindowMessageW 相同字符串会得到同一个系统级消息 ID，
   // 用于 ActivateExisting() 通知旧实例唤起自己的主窗口。

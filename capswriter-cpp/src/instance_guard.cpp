@@ -226,6 +226,14 @@ bool InstanceGuard::ActivateExisting() {
   return ctx.hwnd != nullptr;
 }
 
+void InstanceGuard::Release() {
+  if (mutex_) {
+    CloseHandle(mutex_);
+    mutex_ = nullptr;
+  }
+  mutex_existed_ = false;
+}
+
 AppVersion InstanceGuard::CurrentVersion() {
   wchar_t buf[MAX_PATH];
   const DWORD len = GetModuleFileNameW(nullptr, buf, MAX_PATH);

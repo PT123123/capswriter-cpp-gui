@@ -10,6 +10,8 @@
 //    recording; holding longer than the tap window aborts it
 
 #include <chrono>
+#include <atomic>
+#include <functional>
 
 #include <windows.h>
 
@@ -30,12 +32,38 @@ inline bool IsToggleKey(const HotkeyDef& def) {
 
 class HotkeyDispatch {
  public:
-  HotkeyDispatch(const Config& config, DictationController* controller)
-      : config_(config), controller_(controller) {}
+  HotkeyDispatch(const Config& config, DictationController* controller,
+                 std::atomic<bool>* ready = nullptr)
+      : config_(config), controller_(controller), ready_(ready) {}
+
+  // Optional: returns a human-readable reason the engine is not ready yet
+  // (e.g. "loading model" vs "init failed"). Used to enrich the ignored-hotkey
+  // log line and any UI feedback.
+  void SetReadyReason(std::function<std::string()> fn) {
+    ready_reason_ = std::move(fn);
+  }
+
+  // Optional: invoked (on the hook thread) whenever a hotkey arrives while the
+  // engine is not ready, so the frontend can surface a hint to the user instead
+  // of leaving the keypress with no visible effect.
+  void SetOnIgnored(std::function<void(const std::string&)> fn) {
+    on_ignored_ = std::move(fn);
+  }
 
   // Called from the low-level hook thread with (def, is_down) events of
   // the configured hotkeys.
   void Handle(const HotkeyDef& def, bool is_down) {
+    // Belt-and-suspenders: never act on a hotkey before the engine is ready.
+    // The hook is installed before the (slower) model load in AppRuntime::Init,
+    // so a Caps press during the ~3s load reaches this guard and is reported
+    // (via SetOnIgnored) instead of silently doing nothing.
+    if (ready_ && !ready_->load()) {
+      std::string reason = ready_reason_ ? ready_reason_() : std::string();
+      if (reason.empty()) reason = "语音引擎尚未就绪";
+      LOG_WARN("快捷键被忽略（引擎未就绪）：%s。", reason.c_str());
+      if (on_ignored_) on_ignored_(reason);
+      return;
+    }
     if (is_down) {
       press_started_recording_ = controller_->StartRecording();
       press_time_ = std::chrono::steady_clock::now();
@@ -101,6 +129,12 @@ class HotkeyDispatch {
  private:
   const Config& config_;
   DictationController* controller_;
+  // When non-null, hotkeys are ignored until this flips to true (model ready).
+  std::atomic<bool>* ready_ = nullptr;
+
+  // Optional diagnostics hooks (see setters above).
+  std::function<std::string()> ready_reason_;
+  std::function<void(const std::string&)> on_ignored_;
 
   // Hook-thread-only state (the callback always runs on the listener
   // thread), so plain members are fine.

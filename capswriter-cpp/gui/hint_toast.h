@@ -56,6 +56,16 @@ class HintToast : public QObject {
   void PushFrame();
   void Tick();
 
+  // The caret-bottom (or cursor, as a fallback) the toast is anchored to.
+  // Used to pick the monitor whose DPI/resolution the toast is sized for.
+  QPoint ReferencePoint() const;
+  // Scale factor (>= 1.0) for the toast's font/padding/radius, derived from
+  // the monitor under `ref`: the larger of its per-monitor DPI and a
+  // resolution-based factor, so the hint stays a comfortable size on every
+  // display (fixes the too-small toast on high-DPI / high-res secondary
+  // screens).
+  qreal ToastScaleForPoint(const QPoint& ref) const;
+
   HWND hwnd_ = nullptr;
   QTimer timer_;
   QImage image_;

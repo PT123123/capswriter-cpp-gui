@@ -321,6 +321,7 @@ bool Config::LoadFromFile(const std::string& path, std::string* error) {
   asr.provider = GetStr(root, "asr.provider", asr.provider);
   asr.decoding_method =
       GetStr(root, "asr.decoding_method", asr.decoding_method);
+  asr.model = GetStr(root, "asr.model", asr.model);
   asr.paraformer_model =
       GetStr(root, "asr.paraformer_model", asr.paraformer_model);
   asr.tokens = GetStr(root, "asr.tokens", asr.tokens);
@@ -480,6 +481,7 @@ bool Config::SaveToFile(const std::string& path, std::string* error) const {
   out << "  num_threads: " << asr.num_threads << "\n";
   out << "  provider: " << YamlScalar(asr.provider) << "\n";
   out << "  decoding_method: " << YamlScalar(asr.decoding_method) << "\n";
+  out << "  model: " << YamlScalar(asr.model) << "\n";
   out << "  paraformer_model: " << YamlScalar(asr.paraformer_model) << "\n";
   out << "  tokens: " << YamlScalar(asr.tokens) << "\n";
   out << "  hotwords_file: " << YamlScalar(asr.hotwords_file) << "\n";

@@ -12,6 +12,7 @@
 #include "instance_guard.h"
 #include "log.h"
 #include "udp_io.h"
+#include "crash_handler.h"
 
 using namespace capswriter;
 
@@ -39,6 +40,7 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD type) {
 
 int main(int argc, char** argv) {
   SetConsoleOutputCP(CP_UTF8);
+  InstallCrashHandlers();
 
   // ---- 单实例 + 新版本替代旧版本 ----
   // guard 必须存活到进程退出，以保持互斥体句柄不被释放。
@@ -75,8 +77,16 @@ int main(int argc, char** argv) {
   LOG_INFO("Loaded config: %s", config_path.c_str());
 
   AsrEngine engine;
-  if (!engine.Init(config, &err)) {
-    LOG_ERROR("ASR init failed: %s", err.c_str());
+  try {
+    if (!engine.Init(config, &err)) {
+      LOG_ERROR("ASR init failed: %s", err.c_str());
+      return 1;
+    }
+  } catch (const std::exception& e) {
+    LOG_ERROR("ASR init threw (uncaught exception): %s", e.what());
+    return 1;
+  } catch (...) {
+    LOG_ERROR("ASR init threw (unknown exception type)");
     return 1;
   }
 

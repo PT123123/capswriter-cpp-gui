@@ -6,6 +6,7 @@
 
 #include "app_icons.h"
 #include "audio_recorder.h"
+#include "asr_engine.h"
 #include "config.h"
 #include "log.h"
 #include "main_window.h"
@@ -15,11 +16,15 @@ namespace capswriter {
 
 TrayController::TrayController(MainWindow* window, Config* config,
                                const std::string& config_path,
+                               AsrEngine* engine,
+                               std::function<void()> restart_fn,
                                QObject* parent)
     : QObject(parent),
       window_(window),
       config_(config),
-      config_path_(config_path) {}
+      config_path_(config_path),
+      engine_(engine),
+      restart_fn_(std::move(restart_fn)) {}
 
 bool TrayController::Initialize() {
   if (!QSystemTrayIcon::isSystemTrayAvailable()) {
@@ -28,7 +33,7 @@ bool TrayController::Initialize() {
 
   tray_ = new QSystemTrayIcon(this);
   tray_->setIcon(MakeTrayIcon(current_state_));
-  tray_->setToolTip(QStringLiteral("CapsWriter-Offline"));
+  tray_->setToolTip(TooltipFor(current_state_, engine_));
 
   // 双击托盘图标显示主窗口。
   connect(tray_, &QSystemTrayIcon::activated, this,
@@ -91,21 +96,27 @@ void TrayController::SetState(TrayIconState state) {
   if (!tray_) return;
 
   tray_->setIcon(MakeTrayIcon(current_state_));
+  tray_->setToolTip(TooltipFor(current_state_, engine_));
+}
 
-  switch (current_state_) {
+QString TrayController::TooltipFor(TrayIconState state, AsrEngine* engine) {
+  switch (state) {
     case TrayIconState::kRecording:
-      tray_->setToolTip(QStringLiteral("CapsWriter-Offline · 正在听写"));
-      break;
+      return QStringLiteral("CapsWriter-Offline · 正在听写");
     case TrayIconState::kBusy:
-      tray_->setToolTip(QStringLiteral("CapsWriter-Offline · 加载中"));
-      break;
+      return QStringLiteral("CapsWriter-Offline · 正在加载语音模型，请稍候…");
     case TrayIconState::kError:
-      tray_->setToolTip(QStringLiteral("CapsWriter-Offline · 出错"));
-      break;
+      return QStringLiteral("CapsWriter-Offline · 出错（请查看日志）");
     case TrayIconState::kIdle:
-    default:
-      tray_->setToolTip(QStringLiteral("CapsWriter-Offline · 待命"));
-      break;
+    default: {
+      QString tip = QStringLiteral("CapsWriter-Offline · 待命");
+      if (engine && engine->ready() && !engine->loaded_model_id().empty()) {
+        tip += QStringLiteral("（") +
+               QString::fromStdString(engine->loaded_model_id()) +
+               QStringLiteral("）");
+      }
+      return tip;
+    }
   }
 }
 
@@ -116,7 +127,7 @@ void TrayController::ShowWindow() {
 }
 
 void TrayController::OpenSettings() {
-  SettingsDialog dialog(config_, config_path_, nullptr);
+  SettingsDialog dialog(config_, config_path_, engine_, restart_fn_, nullptr);
   dialog.exec();
 }
 

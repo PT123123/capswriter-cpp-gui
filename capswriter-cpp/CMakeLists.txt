@@ -24,6 +24,7 @@ add_library(capswriter_core STATIC
   src/util.cpp
   src/audio_recorder.cpp
   src/asr_engine.cpp
+  src/models.cpp
   src/hotkey_listener.cpp
   src/text_injector.cpp
   src/text_transform.cpp
@@ -31,6 +32,7 @@ add_library(capswriter_core STATIC
   src/udp_io.cpp
   src/window_util.cpp
   src/instance_guard.cpp
+  src/crash_handler.cpp
 )
 
 target_include_directories(capswriter_core PUBLIC
@@ -66,13 +68,13 @@ target_link_libraries(capswriter PRIVATE capswriter_core)
 # Qt tray frontend.
 # ---------------------------------------------------------------------------
 if(CAPSWRITER_BUILD_GUI)
-  find_package(Qt6 COMPONENTS Widgets QUIET)
+  find_package(Qt6 COMPONENTS Widgets Network QUIET)
   if(Qt6_FOUND)
-    set(CAPSWRITER_QT_LIB Qt6::Widgets)
+    set(CAPSWRITER_QT_LIB Qt6::Widgets Qt6::Network)
   else()
-    find_package(Qt5 5.15 QUIET COMPONENTS Widgets)
+    find_package(Qt5 5.15 QUIET COMPONENTS Widgets Network)
     if(Qt5_FOUND)
-      set(CAPSWRITER_QT_LIB Qt5::Widgets)
+      set(CAPSWRITER_QT_LIB Qt5::Widgets Qt5::Network)
     endif()
   endif()
 

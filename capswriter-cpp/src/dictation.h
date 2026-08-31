@@ -94,6 +94,7 @@ class DictationController {
 
  private:
   void RunPipeline(bool recognize);
+  void RunPipelineImpl(bool recognize);
 
   const Config& config_;
   AsrEngine* engine_;

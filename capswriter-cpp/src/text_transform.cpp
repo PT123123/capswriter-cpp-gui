@@ -60,12 +60,15 @@ std::string ConvertTraditional(const std::string& utf8,
 }
 
 // Parses "pattern = replacement" lines; invalid regexes are skipped.
+// `source` is the rule file path, used only to make the warning actionable.
 std::vector<std::pair<std::regex, std::string>> ParseRules(
-    const std::string& content) {
+    const std::string& content, const std::string& source = std::string()) {
   std::vector<std::pair<std::regex, std::string>> rules;
   std::istringstream stream(content);
   std::string line;
+  int line_no = 0;
   while (std::getline(stream, line)) {
+    ++line_no;
     // Same convention as the Python client: skip blanks/comments, split
     // on " = ", turn a literal \s in the replacement into a space.
     const std::string trimmed = Trim(line);
@@ -82,8 +85,17 @@ std::vector<std::pair<std::regex, std::string>> ParseRules(
     try {
       rules.emplace_back(std::regex(pattern, std::regex::ECMAScript),
                          replacement);
-    } catch (const std::regex_error&) {
-      LOG_WARN("Invalid rule skipped: %s", pattern.c_str());
+    } catch (const std::regex_error& e) {
+      // std::regex(ECMAScript) 不支持后行断言 (?<=...) 等写法,常见导致整条
+      // 规则被跳过却毫无提示。这里给出行号、出错文件与可读的排查方向。
+      const std::string where =
+          source.empty() ? std::string()
+                         : ("（规则文件: " + source + "）");
+      LOG_WARN(
+          "替换规则第 %d 行正则无效,已跳过：「%s」(std::regex 报错: %s)。"
+          "注意 std::regex 不支持后行断言 (?<=...),请改用前瞻 (?=...) 或改写;"
+          "该行本次不会生效。%s",
+          line_no, pattern.c_str(), e.what(), where.c_str());
     }
   }
   return rules;
@@ -96,7 +108,7 @@ int RuleCorrector::UpdateRules(const std::string& path) {
   std::string content;
   std::vector<std::pair<std::regex, std::string>> rules;
   if (ReadFileBytes(path, &content)) {
-    rules = ParseRules(content);
+    rules = ParseRules(content, path);
   } else {
     LOG_INFO("Rule file not found (no rules loaded): %s", path.c_str());
   }
@@ -121,7 +133,7 @@ void RuleCorrector::ReloadIfChanged() {
   LOG_INFO("Rule file changed, reloading: %s", path_.c_str());
   std::string content;
   if (!ReadFileBytes(path_, &content)) return;
-  rules_ = ParseRules(content);
+  rules_ = ParseRules(content, path_);
   mtime_ = mtime;
   LOG_INFO("Reloaded %d rules", static_cast<int>(rules_.size()));
 }

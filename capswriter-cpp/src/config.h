@@ -32,6 +32,11 @@ struct AsrConfig {
   int num_threads = 4;
   std::string provider = "cpu";
   std::string decoding_method = "greedy_search";
+  // Selected recognition model (UI switch only for now; the engine still
+  // loads Paraformer regardless of this value until switching is wired up).
+  // Candidate names mirror the offline parent project; update freely after
+  // researching which small/high-quality models to ship.
+  std::string model = "Paraformer";
   std::string paraformer_model;  // path to paraformer onnx model
   std::string tokens;            // path to tokens.txt
   // Contextual biasing hotword list fed to sherpa-onnx (one word per line,
